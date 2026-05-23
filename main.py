@@ -2,35 +2,11 @@ from ultralytics import YOLO
 import numpy as np
 import os
 import cv2
-
 from src.alert_system import AlertSystem
 
-'''
-def main():
-    model_path = "model/eyesyawn.pt"
-    
-    if not os.path.exists(model_path):
-        print(f"{model_path} 경로에 모델 파일이 없습니다.")
-        return
-
-    # 2. 모델 로드
-    model = YOLO(model_path)
-
-    results = model.predict(
-        source="data/test/images",
-        save=True,                 
-        conf=0.25,                 
-        line_width=2               
-    )
-
-if __name__ == "__main__":
-    main()
-    '''
-    
 def preprocess_frame_opencv(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     mean_brightness = np.mean(gray)
-
     if mean_brightness < 50:
         gamma = 2.0
     elif mean_brightness < 90:
@@ -40,21 +16,17 @@ def preprocess_frame_opencv(frame):
     if gamma == 1.0:
         return frame
     invGamma = 1.0 / gamma
-
     table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
     processed_frame = cv2.LUT(frame, table)
-    
     return processed_frame
 
-
-
 def main():
-    model = YOLO("model/eyesyawn.pt")
+    drowsy_model = YOLO("model/eyesyawn.pt")
+    distract_model = YOLO("model/distract.pt")
     
     cap = cv2.VideoCapture(0)
-
     alert_system = AlertSystem(alarm=30)
-    DROWSY_CLASS_ID = 0
+    DROWSY_CLASS_ID = 0 
 
     while True:
         ret, frame = cap.read()
@@ -63,22 +35,49 @@ def main():
         
         processed_frame = preprocess_frame_opencv(frame)
 
-        results = model.predict(processed_frame, conf=0.25, verbose=False)
-        annotated = results[0].plot()
+        drowsy_results = drowsy_model.predict(processed_frame, conf=0.25, verbose=False)
+        distract_results = distract_model.predict(processed_frame, conf=0.25, verbose=False)
 
-        detected_classes = results[0].boxes.cls.cpu().numpy()
-        sleep_OX = DROWSY_CLASS_ID in detected_classes
+        is_drowsy = False
+        is_distracted = False
 
-        annotated = alert_system.process_frame(annotated, sleep_OX)
+        for r in drowsy_results:
+            for box in r.boxes:
+                cls_id = int(box.cls[0])
+                conf = float(box.conf[0])
+                xyxy = box.xyxy[0].cpu().numpy().astype(int)
+                
+                if cls_id == DROWSY_CLASS_ID:
+                    is_drowsy = True
+                
+                label = f"{drowsy_model.names[cls_id]} {conf:.2f}"
+                cv2.rectangle(frame, (xyxy[0], xyxy[1]), (xyxy[2], xyxy[3]), (255, 0, 0), 2)
+                cv2.putText(frame, label, (xyxy[0], xyxy[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
 
-        cv2.imshow("Detection", annotated)
+        for r in distract_results:
+            for box in r.boxes:
+                cls_id = int(box.cls[0])
+                conf = float(box.conf[0]) 
+                xyxy = box.xyxy[0].cpu().numpy().astype(int)
+                
+                if conf >= 0.80:
+                    if cls_id in [0, 4]:
+                        is_distracted = True
+                    
+                    label = f"{distract_model.names[cls_id]} {conf:.2f}"
+                    cv2.rectangle(frame, (xyxy[0], xyxy[1]), (xyxy[2], xyxy[3]), (0, 255, 0), 2)
+                    cv2.putText(frame, label, (xyxy[0], xyxy[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         
-        if cv2.waitKey(1) & 0xFF == ord('q'):  # q로 종료!!
+
+        frame = alert_system.process_frame(frame, is_drowsy, is_distracted)
+
+        cv2.imshow("Driver Monitor System", frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-    
+
     cap.release()
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()
-
