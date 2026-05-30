@@ -6,10 +6,12 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 from src.rest_area_service import DrowsyShelterService
+from src.event_logger import EventLogger
 
 load_dotenv()
 
 FONT_PATH = "assets/fonts/NotoSansKR-VariableFont_wght.ttf"
+
 
 class AlertSystem:
     def __init__(self, alarm=30):
@@ -26,6 +28,8 @@ class AlertSystem:
         except ValueError as e:
             print(f"[경고] {e} — 졸음쉼터 기능 비활성화")
             self.shelter_service = None
+
+        self.logger = EventLogger()
 
     def play_sound(self):
         winsound.Beep(2500, 500)
@@ -71,8 +75,19 @@ class AlertSystem:
             self.danger_count = max(0, self.danger_count - 1)
 
         is_danger = self.danger_count > self.alarm
+        is_caution = 5 < self.danger_count <= self.alarm
+        is_alert = is_caution or is_danger
 
-        if 5 < self.danger_count <= self.alarm:
+        # 이벤트 로그 — 시작
+        if is_alert:
+            risk_level = "DANGER" if is_danger else "CAUTION"
+            self.logger.start_event(is_drowsy, is_distracted, risk_level)
+
+        # 이벤트 로그 — 종료 (정상으로 복귀)
+        if not is_alert and self.logger.current_event is not None:
+            self.logger.end_event()
+
+        if is_caution:
             cv2.rectangle(frame, (0, 0), (width, height), (0, 255, 255), 10)
             status_text = "CAUTION: "
             if is_drowsy: status_text += "DROWSY "
@@ -93,6 +108,10 @@ class AlertSystem:
                 self.nearest_shelters = self.shelter_service.find_nearest(
                     self.current_lat, self.current_lng, limit=3
                 )
+                # 가장 가까운 쉼터 정보를 로그에 업데이트
+                if self.nearest_shelters:
+                    top = self.nearest_shelters[0]
+                    self.logger.update_shelter(top.get("name", ""), top.get("distance_km", 0))
 
             frame = self._draw_shelter_info(frame)
 
